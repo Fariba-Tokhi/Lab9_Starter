@@ -7,7 +7,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Lab 9</title>
 
+  <!-- TrackJS - replace YOUR_TOKEN with your actual TrackJS token -->
+  <!-- <script type="text/javascript">window._trackJs = { token: "YOUR_TOKEN" };</script> -->
+  <!-- <script type="text/javascript" src="https://cdn.trackjs.com/agent/v3/latest/t.js"></script> -->
+
   <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+
     button {
       margin: 3px;
     }
@@ -42,66 +51,276 @@
       row-gap: 5px;
     }
 
-    #error-btns>* {
+    #error-btns > * {
       padding: 8px 2px;
       width: 122px;
     }
+
+    #error-log {
+      background: #111;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 13px;
+      height: 160px;
+      margin-top: 20px;
+      overflow-y: auto;
+      padding: 10px;
+      width: 760px;
+    }
+
+    #error-log .err  { color: #f55; }
+    #error-log .warn { color: #fa0; }
+    #error-log .info { color: #7af; }
   </style>
 </head>
 
 <body>
   <main>
+    <h2>Lab 9 — Error Debugging Demo</h2>
+
     <form>
       <fieldset>
         <legend>Error Calculator</legend>
-        <input name="first-num" id="first-num" />
+        <input name="first-num" id="first-num" placeholder="num" />
         <select name="operator" id="operator">
           <option>+</option>
           <option>-</option>
           <option>*</option>
           <option>/</option>
         </select>
-        <input name="second-num" id="second-num" />
+        <input name="second-num" id="second-num" placeholder="num" />
         <button id="calculate">Calculate</button>
         <br />
         <output></output>
+        <p id="calc-error" style="color:red;margin:4px 0;min-height:1em;"></p>
       </fieldset>
     </form>
 
     <section id="error-btns">
-      <button>Console Log</button>
-      <button>Console Error</button>
-      <button>Console Count</button>
-      <button>Console Warn</button>
-      <button>Console Assert</button>
-      <button>Console Clear</button>
-      <button>Console Dir</button>
-      <button>Console dirxml</button>
-      <button>Console Group Start</button>
-      <button>Console Group End</button>
-      <button>Console Table</button>
-      <button>Start Timer</button>
-      <button>End Timer</button>
-      <button>Console Trace</button>
-      <button>Trigger a Global Error</button>
+      <button id="btn-log">Console Log</button>
+      <button id="btn-error">Console Error</button>
+      <button id="btn-count">Console Count</button>
+      <button id="btn-warn">Console Warn</button>
+      <button id="btn-assert">Console Assert</button>
+      <button id="btn-clear">Console Clear</button>
+      <button id="btn-dir">Console Dir</button>
+      <button id="btn-dirxml">Console dirxml</button>
+      <button id="btn-group-start">Console Group Start</button>
+      <button id="btn-group-end">Console Group End</button>
+      <button id="btn-table">Console Table</button>
+      <button id="btn-time-start">Start Timer</button>
+      <button id="btn-time-end">End Timer</button>
+      <button id="btn-trace">Console Trace</button>
+      <button id="btn-global-error">Trigger a Global Error</button>
     </section>
+
+    <div id="error-log">
+      <span class="info">// On-page error log (mirrors console output for key events)</span>
+    </div>
   </main>
 
   <script>
-    let form = document.querySelector('form');
-    form.addEventListener('submit', e => {
-      e.preventDefault();
-      let output = document.querySelector('output');
-      let firstNum = document.querySelector('#first-num').value;
-      let secondNum = document.querySelector('#second-num').value;
-      let operator = document.querySelector('#operator').value;
-      output.innerHTML = eval(`${firstNum} ${operator} ${secondNum}`);
+    // ─── Custom Error Types ───────────────────────────────────────────────────
+
+    class CalculationError extends Error {
+      constructor(message, expression) {
+        super(message);
+        this.name = 'CalculationError';
+        this.expression = expression;
+      }
+    }
+
+    class ValidationError extends Error {
+      constructor(message, field) {
+        super(message);
+        this.name = 'ValidationError';
+        this.field = field;
+      }
+    }
+
+    // ─── On-page log helper ───────────────────────────────────────────────────
+
+    const logPanel = document.getElementById('error-log');
+
+    function panelLog(text, cls = '') {
+      const line = document.createElement('div');
+      if (cls) line.className = cls;
+      line.textContent = text;
+      logPanel.appendChild(line);
+      logPanel.scrollTop = logPanel.scrollHeight;
+    }
+
+    // ─── Global Error Handler (Step 5) ───────────────────────────────────────
+
+    window.onerror = function (message, source, lineno, colno, error) {
+      const summary = `[Global onerror] ${message} (${source}:${lineno}:${colno})`;
+      console.log(summary);
+      panelLog(summary, 'err');
+      // In a real app you'd fetch() this payload to an error-tracking endpoint.
+      return true; // prevents default browser error reporting
+    };
+
+    window.addEventListener('error', function (event) {
+      // Fires for uncaught errors not caught by onerror (e.g. resource load failures).
+      const summary = `[Global addEventListener error] ${event.message}`;
+      console.log(summary);
+      panelLog(summary, 'err');
     });
 
-    let errorBtns = Array.from(document.querySelectorAll('#error-btns > button'));
+    // ─── Calculator (Step 3 — try/catch/finally + custom errors) ─────────────
 
-    // Start your code here
-    // You may move this JS to another file if you wish
+    const form       = document.querySelector('form');
+    const outputEl   = document.querySelector('output');
+    const calcErrEl  = document.getElementById('calc-error');
+
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      calcErrEl.textContent = '';
+      outputEl.innerHTML    = '';
+
+      const firstVal  = document.querySelector('#first-num').value.trim();
+      const secondVal = document.querySelector('#second-num').value.trim();
+      const operator  = document.querySelector('#operator').value;
+
+      try {
+        // Validate inputs — throw a custom ValidationError for empty fields
+        if (firstVal === '' || secondVal === '') {
+          throw new ValidationError('Both number fields are required.', firstVal === '' ? 'first-num' : 'second-num');
+        }
+
+        const first  = Number(firstVal);
+        const second = Number(secondVal);
+
+        if (isNaN(first) || isNaN(second)) {
+          throw new ValidationError('Inputs must be valid numbers.', 'first-num or second-num');
+        }
+
+        // Throw a custom CalculationError for divide-by-zero
+        if (operator === '/' && second === 0) {
+          throw new CalculationError('Division by zero is not allowed.', `${first} / ${second}`);
+        }
+
+        const expression = `${first} ${operator} ${second}`;
+        const result = eval(expression); // safe here because inputs are validated numbers
+        outputEl.innerHTML = result;
+        panelLog(`Calculated: ${expression} = ${result}`, 'info');
+
+      } catch (err) {
+        if (err instanceof ValidationError) {
+          calcErrEl.textContent = `Validation error on "${err.field}": ${err.message}`;
+          console.error('ValidationError caught:', err);
+          panelLog(`ValidationError — ${err.message}`, 'err');
+        } else if (err instanceof CalculationError) {
+          calcErrEl.textContent = `Calculation error: ${err.message} (expression: "${err.expression}")`;
+          console.error('CalculationError caught:', err);
+          panelLog(`CalculationError — ${err.message}`, 'err');
+        } else {
+          calcErrEl.textContent = `Unexpected error: ${err.message}`;
+          console.error('Unexpected error:', err);
+          panelLog(`Unexpected error — ${err.message}`, 'err');
+        }
+      } finally {
+        // finally always runs — useful for cleanup (e.g. hiding a spinner)
+        console.log('Calculator form submission attempt finished (finally block).');
+      }
+    });
+
+    // ─── Console Demo Buttons (Step 2) ───────────────────────────────────────
+
+    const sampleData = [
+      { name: 'Alice',   score: 92, grade: 'A' },
+      { name: 'Bob',     score: 75, grade: 'B' },
+      { name: 'Charlie', score: 58, grade: 'D' },
+    ];
+
+    document.getElementById('btn-log').addEventListener('click', () => {
+      console.log('console.log demo — sample student data:', sampleData);
+      panelLog('console.log fired — check the DevTools console.', 'info');
+    });
+
+    document.getElementById('btn-error').addEventListener('click', () => {
+      console.error('console.error demo — something went wrong with the data pipeline!');
+      panelLog('console.error fired.', 'err');
+    });
+
+    document.getElementById('btn-count').addEventListener('click', () => {
+      console.count('btn-count clicks');
+      panelLog('console.count fired — check DevTools for count.', 'info');
+    });
+
+    document.getElementById('btn-warn').addEventListener('click', () => {
+      console.warn('console.warn demo — this action may have unintended side effects.');
+      panelLog('console.warn fired.', 'warn');
+    });
+
+    document.getElementById('btn-assert').addEventListener('click', () => {
+      // assert(condition, message) — logs only when condition is falsy
+      console.assert(1 === 2, 'console.assert demo — 1 is NOT equal to 2 (assertion failed as expected)');
+      console.assert(1 === 1, 'This message will NOT appear because the assertion passes.');
+      panelLog('console.assert fired — failed assertion logged to DevTools.', 'warn');
+    });
+
+    document.getElementById('btn-clear').addEventListener('click', () => {
+      console.clear();
+      logPanel.innerHTML = '<span class="info">// Console cleared.</span>';
+    });
+
+    document.getElementById('btn-dir').addEventListener('click', () => {
+      console.dir(document.querySelector('form'));
+      panelLog('console.dir fired — inspect the form element in DevTools.', 'info');
+    });
+
+    document.getElementById('btn-dirxml').addEventListener('click', () => {
+      console.dirxml(document.querySelector('form'));
+      panelLog('console.dirxml fired — inspect form XML tree in DevTools.', 'info');
+    });
+
+    document.getElementById('btn-group-start').addEventListener('click', () => {
+      console.group('Student Report Group');
+      console.log('Starting grouped output...');
+      sampleData.forEach(s => console.log(`  ${s.name}: ${s.score} (${s.grade})`));
+      panelLog('console.group started — run "Console Group End" to close.', 'info');
+    });
+
+    document.getElementById('btn-group-end').addEventListener('click', () => {
+      console.log('Closing group...');
+      console.groupEnd();
+      panelLog('console.groupEnd called.', 'info');
+    });
+
+    document.getElementById('btn-table').addEventListener('click', () => {
+      console.table(sampleData);
+      panelLog('console.table fired — see the table in DevTools.', 'info');
+    });
+
+    document.getElementById('btn-time-start').addEventListener('click', () => {
+      console.time('demo-timer');
+      panelLog('console.time started — "demo-timer" is running.', 'info');
+    });
+
+    document.getElementById('btn-time-end').addEventListener('click', () => {
+      console.timeEnd('demo-timer');
+      panelLog('console.timeEnd called — elapsed time logged to DevTools.', 'info');
+    });
+
+    document.getElementById('btn-trace').addEventListener('click', () => {
+      function inner()  { console.trace('console.trace demo — call stack:'); }
+      function middle() { inner(); }
+      function outer()  { middle(); }
+      outer();
+      panelLog('console.trace fired — see stack trace in DevTools.', 'info');
+    });
+
+    // ─── Global Error Trigger (Step 5) ───────────────────────────────────────
+
+    document.getElementById('btn-global-error').addEventListener('click', () => {
+      panelLog('Triggering a global (uncaught) error...', 'warn');
+      // setTimeout pushes execution outside the current call stack so
+      // there is no surrounding try/catch — this becomes a true global error.
+      setTimeout(() => {
+        null.triggerGlobalError(); // intentional — triggers window.onerror
+      }, 0);
+    });
   </script>
 </body>
 
